@@ -12,13 +12,13 @@ import sys
 
 def _get_async_mode():
     try:
-        import eventlet  # noqa
-        return 'eventlet'
+        import gevent
+        return 'gevent'
     except ImportError:
         pass
     try:
-        import gevent  # noqa
-        return 'gevent'
+        import eventlet
+        return 'eventlet'
     except ImportError:
         pass
     return 'threading'
