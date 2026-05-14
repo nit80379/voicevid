@@ -1095,11 +1095,11 @@ const SocketClient = (() => {
   const listeners = {};
   function connect() {
     if (socket && socket.connected) return socket;
-    socket = io({ transports: ['websocket','polling'], reconnection: true, reconnectionAttempts: 10, reconnectionDelay: 1000, reconnectionDelayMax: 8000, withCredentials: true });
+    socket = io({ transports: ['polling','websocket'], reconnection: true, reconnectionAttempts: 10, reconnectionDelay: 1000, reconnectionDelayMax: 8000, withCredentials: true });
     socket.on('connect', () => { startHeartbeat(); emit('connected', socket.id); });
     socket.on('disconnect', (reason) => { stopHeartbeat(); emit('disconnected', reason); });
     socket.on('reconnect', (attempt) => emit('reconnected', attempt));
-    ['presence_update','incoming_call','call_ringing','call_accepted','call_rejected','call_cancelled','call_ended','call_error','call_accepted_ack','webrtc_offer','webrtc_answer','webrtc_ice','webrtc_ice_restart','friend_request','friend_accepted','heartbeat_ack'].forEach(ev => socket.on(ev, d => emit(ev, d)));
+    ['presence_update','incoming_call','call_ringing','call_accepted','call_rejected','call_cancelled','call_ended','call_error','call_accepted_ack','webrtc_offer','webrtc_answer','webrtc_ice','webrtc_ice_restart','callee_ready','friend_request','friend_accepted','heartbeat_ack'].forEach(ev => socket.on(ev, d => emit(ev, d)));
     return socket;
   }
   function startHeartbeat() { stopHeartbeat(); heartbeatTimer = setInterval(() => { if(socket && socket.connected) socket.emit('heartbeat'); }, 25000); }
