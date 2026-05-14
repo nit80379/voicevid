@@ -650,6 +650,18 @@ def on_ice_restart(data):
     other_id = call['callee_id'] if call['caller_id'] == user.id else call['caller_id']
     emit('webrtc_ice_restart', {'call_id': data.get('call_id'), 'from_user_id': user.id}, room=f'user_{other_id}')
 
+@socketio.on('callee_ready')
+def on_callee_ready(data):
+    """Callee sends this when their call page loads and they're ready to receive the WebRTC offer."""
+    user = _get_user()
+    if not user:
+        return
+    call = get_call(data.get('call_id'))
+    if not call or call['callee_id'] != user.id:
+        return
+    # Notify caller that callee is ready — caller should now send the offer
+    emit('callee_ready', {'call_id': data.get('call_id')}, room=f'user_{call["caller_id"]}')
+
 # ── HTML Templates ─────────────────────────────────────────────────────────────
 CSS = """
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:opsz,wght@9..40,300;400;500;600;700&display=swap" rel="stylesheet">
@@ -1433,7 +1445,7 @@ window.CURRENT_USER = { id: {{ user.id }}, username: "{{ user.username }}", disp
 </script>
 """ + SOUNDS_JS + SOCKET_CLIENT_JS + TOAST_JS + INCOMING_CALL_JS + """
 <script>
-let contacts = [], currentCallId = null, currentCallee = null;
+let contacts = [], currentCallId = null, currentCallee = null, currentCallType = null;
 
 // Mobile sidebar
 const sidebar = document.getElementById('sidebar');
@@ -1635,6 +1647,7 @@ async function loadCallHistory() {
 // Initiate call
 function initiateCall(username, callType) {
   currentCallee = username;
+  currentCallType = callType;
   const contact = contacts.find(c => c.username === username) || { display_name: username, avatar_url: '/api/avatar/' + username };
   document.getElementById('modal-avatar').src = contact.avatar_url;
   document.getElementById('modal-name').textContent = contact.display_name;
@@ -1659,11 +1672,8 @@ SocketClient.on('call_ringing', (data) => {
 SocketClient.on('call_accepted', (data) => {
   Sounds.stopCalling(); Sounds.accepted();
   document.getElementById('call-modal').classList.add('hidden');
-  const callData = data;
-  const call = { call_id: data.call_id };
-  // Get call type from modal context — find from current state
-  const callType = 'video'; // default; ideally track it
-  window.location.href = '/call/' + data.call_id + '?type=video&peer=' + (data.callee ? data.callee.username : currentCallee) + '&role=caller';
+  const callType = currentCallType || 'video';
+  window.location.href = '/call/' + data.call_id + '?type=' + callType + '&peer=' + (data.callee ? data.callee.username : currentCallee) + '&role=caller';
 });
 
 SocketClient.on('call_rejected', (data) => {
@@ -1753,6 +1763,8 @@ const WebRTCEngine = (() => {
   let iceRestartTimer=null, reconnectAttempts=0;
   const MAX_RECONNECT=5;
 
+  let calleeReady = false;
+
   async function fetchIceConfig() {
     try { const r=await fetch('/api/ice-config',{credentials:'include'}); return await r.json(); }
     catch { return {iceServers:[{urls:'stun:stun.l.google.com:19302'}]}; }
@@ -1773,6 +1785,7 @@ const WebRTCEngine = (() => {
     };
     pc.onnegotiationneeded = async () => {
       if(role!=='caller')return;
+      if(!calleeReady)return; // Wait for callee to be ready before sending offer
       try { makingOffer=true; const o=await pc.createOffer(); if(pc.signalingState!=='stable')return; await pc.setLocalDescription(o); SocketClient.send('webrtc_offer',{call_id:callId,offer:pc.localDescription}); }
       catch(e){console.error(e);}finally{makingOffer=false;}
     };
@@ -1812,8 +1825,14 @@ const WebRTCEngine = (() => {
       return false;
     }
   }
-  async function initAsCaller(cId,cType){callId=cId;callType=cType;role='caller';polite=false;iceConfig=await fetchIceConfig();const ok=await acquireMedia();if(!ok)return;createPC();localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));}
-  async function initAsCallee(cId,cType){callId=cId;callType=cType;role='callee';polite=true;iceConfig=await fetchIceConfig();const ok=await acquireMedia();if(!ok)return;createPC();localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));}
+  async function initAsCaller(cId,cType){callId=cId;callType=cType;role='caller';polite=false;iceConfig=await fetchIceConfig();const ok=await acquireMedia();if(!ok)return;createPC();localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
+    // Caller does NOT send offer immediately — wait for callee_ready signal first
+    // onnegotiationneeded is suppressed until callee is ready (see callee_ready handler below)
+  }
+  async function initAsCallee(cId,cType){callId=cId;callType=cType;role='callee';polite=true;iceConfig=await fetchIceConfig();const ok=await acquireMedia();if(!ok)return;createPC();localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
+    // Signal to caller that callee is now ready to receive the offer
+    SocketClient.send('callee_ready',{call_id:callId});
+  }
 
   async function handleOffer(offer){
     if(!pc)return;
@@ -1853,6 +1872,15 @@ const WebRTCEngine = (() => {
   SocketClient.on('webrtc_answer',async d=>{if(d.call_id!==callId)return;await handleAnswer(d.answer);});
   SocketClient.on('webrtc_ice',async d=>{if(d.call_id!==callId||!d.candidate)return;await handleICE(d.candidate);});
   SocketClient.on('webrtc_ice_restart',async d=>{if(d.call_id!==callId||role!=='caller')return;try{const o=await pc.createOffer({iceRestart:true});await pc.setLocalDescription(o);SocketClient.send('webrtc_offer',{call_id:callId,offer:pc.localDescription});}catch(e){}});
+  SocketClient.on('callee_ready', async d=>{
+    if(d.call_id!==callId||role!=='caller')return;
+    calleeReady=true;
+    // Now manually trigger the offer since onnegotiationneeded may have already fired
+    if(pc&&pc.signalingState==='stable'&&localStream){
+      try{makingOffer=true;const o=await pc.createOffer();if(pc.signalingState!=='stable'){makingOffer=false;return;}await pc.setLocalDescription(o);SocketClient.send('webrtc_offer',{call_id:callId,offer:pc.localDescription});}
+      catch(e){console.error(e);}finally{makingOffer=false;}
+    }
+  });
   SocketClient.on('call_ended',d=>{if(d.call_id!==callId)return;cleanup();Sounds.ended();showEnded(d.reason||'ended');});
   window.addEventListener('beforeunload',()=>{if(callId&&pc)SocketClient.send('call_end',{call_id:callId});});
 
