@@ -475,6 +475,10 @@ def on_connect():
     sid = request.sid
     set_user_online(user.id, sid)
     join_room(f'user_{user.id}')
+    # Restore busy status if user is in an active call (e.g. reconnecting from call page)
+    active = get_user_active_call(user.id)
+    if active:
+        update_user_status(user.id, 'busy')
     friends = user.get_friends()
     for friend in friends:
         emit('presence_update', {'user_id': user.id, 'username': user.username, 'is_online': True, 'status': user.status}, room=f'user_{friend.id}')
@@ -485,14 +489,28 @@ def on_disconnect():
     user = _get_user()
     if not user:
         return
-    active = get_user_active_call(user.id)
-    if active:
-        _handle_call_end(active['call_id'], user.id, 'disconnected')
-    set_user_offline(user.id)
+    # Use a short grace period before ending active calls on disconnect.
+    # This handles the case where the user navigates from dashboard → call page:
+    # the old dashboard socket disconnects briefly before the call page socket connects.
+    def _delayed_disconnect(user_id):
+        import time
+        time.sleep(4)  # 4-second grace window for reconnect
+        # Re-check: if user is now back online with a new socket, skip call end
+        with app.app_context():
+            u = db.session.get(User, user_id)
+            if u and u.is_online:
+                return  # User reconnected — do not end call
+            active = get_user_active_call(user_id)
+            if active:
+                _handle_call_end(active['call_id'], user_id, 'disconnected')
+            set_user_offline(user_id)
+            friends = u.get_friends() if u else []
+            for friend in friends:
+                socketio.emit('presence_update', {'user_id': user_id, 'username': u.username if u else '', 'is_online': False, 'status': 'offline'}, room=f'user_{friend.id}')
+
+    set_user_offline(user.id)  # Mark offline immediately so new connect re-sets it
     leave_room(f'user_{user.id}')
-    friends = user.get_friends()
-    for friend in friends:
-        emit('presence_update', {'user_id': user.id, 'username': user.username, 'is_online': False, 'status': 'offline'}, room=f'user_{friend.id}')
+    threading.Thread(target=_delayed_disconnect, args=(user.id,), daemon=True).start()
 
 @socketio.on('heartbeat')
 def on_heartbeat():
@@ -1111,7 +1129,8 @@ const SocketClient = (() => {
   function isConnected() { return socket && socket.connected; }
   return { connect, on, off, send, isConnected };
 })();
-window.addEventListener('DOMContentLoaded', () => { if(window.CURRENT_USER) SocketClient.connect(); });
+// Auto-connect only on dashboard (not call page which manages its own connection)
+window.addEventListener('DOMContentLoaded', () => { if(window.CURRENT_USER && !window.CALL_ID) SocketClient.connect(); });
 </script>
 """
 
