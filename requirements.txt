@@ -1,0 +1,8 @@
+flask>=3.0,<4
+flask-socketio>=5.3,<6
+flask-sqlalchemy>=3.1,<4
+flask-login>=0.6,<1
+bcrypt>=4.1,<5
+eventlet>=0.36          # async worker for SocketIO on Render
+gunicorn>=22,<23        # production WSGI/ASGI server
+psycopg2-binary>=2.9    # PostgreSQL driver (used on Render; ignored with SQLite)

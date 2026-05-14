@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: voicevid
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:$PORT app:app
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true        # Render auto-generates a secure random value
+      - key: RENDER
+        value: "1"
+      # Optional TURN server — fill in if WebRTC calls fail between different networks
+      # - key: TURN_URL
+      #   value: "turn:your-turn-server.example.com:3478"
+      # - key: TURN_USERNAME
+      #   value: "your-turn-username"
+      # - key: TURN_CREDENTIAL
+      #   value: "your-turn-password"
+    # Optional: attach a PostgreSQL database (recommended for production)
+    # databases:
+    #   - name: voicevid-db
+    #     databaseName: voicevid
+    #     user: voicevid
