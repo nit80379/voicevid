@@ -3,46 +3,42 @@ VoiceVid — Pure Python Single-File Re-creation
 Voice & Video calling app using Flask + SocketIO + WebRTC signaling
 
 Local:  python app.py
-Render: Set start command to → gunicorn --worker-class eventlet -w 1 app:app
-        (or) gunicorn --worker-class gevent  -w 1 app:app
-
-Environment variables (set in Render dashboard or .env locally):
-  SECRET_KEY  — required in production (long random string)
-  DATABASE_URL — optional; defaults to SQLite for local dev
-  PORT        — set automatically by Render
+Render: gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:$PORT app:app
 """
+# ── MONKEY PATCH MUST BE FIRST — before ANY other import ──────────────────────
+# eventlet.monkey_patch() must run before os, threading, flask, etc.
+# This is the fix for "monkey_patch called too late" errors on Render.
+import sys
+
+def _get_async_mode():
+    try:
+        import eventlet  # noqa
+        return 'eventlet'
+    except ImportError:
+        pass
+    try:
+        import gevent  # noqa
+        return 'gevent'
+    except ImportError:
+        pass
+    return 'threading'
+
+_ASYNC_MODE = _get_async_mode()
+
+if _ASYNC_MODE == 'eventlet':
+    import eventlet
+    eventlet.monkey_patch()
+elif _ASYNC_MODE == 'gevent':
+    from gevent import monkey as _gmonkey
+    _gmonkey.patch_all()
+
+# ── Now safe to import everything else ────────────────────────────────────────
 import os
 import re
 import uuid
 import bcrypt
 import threading
 from datetime import datetime, timezone, timedelta
-
-# ── Async worker detection ─────────────────────────────────────────────────────
-# Prefer eventlet > gevent > threading (threading works locally but not on Render)
-def _detect_async_mode():
-    return 'threading'
-    try:
-        import eventlet          # noqa: F401
-        return 'eventlet'
-    except ImportError:
-        pass
-    try:
-        import gevent            # noqa: F401
-        return 'gevent'
-    except ImportError:
-        pass
-    return 'threading'
-
-_ASYNC_MODE = _detect_async_mode()
-
-# Monkey-patch as early as possible when using eventlet/gevent
-if _ASYNC_MODE == 'eventlet':
-    import eventlet
-    eventlet.monkey_patch()
-elif _ASYNC_MODE == 'gevent':
-    from gevent import monkey
-    monkey.patch_all()
 
 from flask import Flask, request, jsonify, session, redirect, url_for, render_template_string
 from flask_socketio import SocketIO, emit, join_room, leave_room
