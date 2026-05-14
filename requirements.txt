@@ -7,3 +7,6 @@ eventlet>=0.36
 gunicorn>=22,<23
 psycopg2-binary>=2.9
 PyMySQL>=1.1
+gevent>=24.2
+gevent-websocket>=0.10
+cryptography>=42.0
